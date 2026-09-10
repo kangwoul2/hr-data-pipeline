@@ -1,0 +1,20 @@
+[project]
+name = "hr-pipeline"
+version = "0.2.0"
+description = "Reproducible HR analytics pipeline with validation, PostgreSQL loading and API serving"
+requires-python = ">=3.11"
+dependencies = [
+  "pandas>=2.2,<3.0",
+  "fastapi>=0.123,<1.0",
+  "uvicorn[standard]>=0.38,<1.0",
+  "sqlalchemy>=2.0,<3.0",
+  "psycopg[binary]>=3.2,<4.0",
+  "pydantic>=2.12,<3.0"
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.3,<9.0"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

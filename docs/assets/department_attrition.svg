@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="430" viewBox="0 0 920 430" role="img" aria-labelledby="title desc">
+  <title id="title">Department attrition rate</title>
+  <desc id="desc">Verified values from department_summary.csv: Sales 20.63%, Human Resources 19.05%, Research and Development 13.84%.</desc>
+  <rect width="920" height="430" fill="#ffffff"/>
+  <text x="60" y="52" font-family="Arial, sans-serif" font-size="24" font-weight="700" fill="#111827">Department attrition rate</text>
+  <text x="60" y="80" font-family="Arial, sans-serif" font-size="14" fill="#6b7280">Source: department_summary.csv · percentage points</text>
+  <line x1="260" y1="115" x2="260" y2="350" stroke="#d1d5db"/>
+  <text x="60" y="155" font-family="Arial" font-size="16" fill="#111827">Sales</text>
+  <rect x="260" y="132" width="495" height="34" rx="4" fill="#4b5563"/>
+  <text x="770" y="155" font-family="Arial" font-size="16" fill="#111827">20.63%</text>
+  <text x="60" y="230" font-family="Arial" font-size="16" fill="#111827">Human Resources</text>
+  <rect x="260" y="207" width="457" height="34" rx="4" fill="#6b7280"/>
+  <text x="732" y="230" font-family="Arial" font-size="16" fill="#111827">19.05%</text>
+  <text x="60" y="305" font-family="Arial" font-size="16" fill="#111827">R&amp;D</text>
+  <rect x="260" y="282" width="332" height="34" rx="4" fill="#9ca3af"/>
+  <text x="607" y="305" font-family="Arial" font-size="16" fill="#111827">13.84%</text>
+  <text x="60" y="390" font-family="Arial" font-size="13" fill="#6b7280">The chart visualizes existing repository aggregates; it is not a newly simulated result.</text>
+</svg>
