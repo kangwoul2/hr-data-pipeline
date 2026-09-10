@@ -4,6 +4,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 import pandas as pd
+from sqlalchemy import text
 
 from hr_pipeline.quality import validate_frame
 from hr_pipeline.storage import bootstrap_schema, build_engine
@@ -23,9 +24,12 @@ def run_pipeline(source: str | Path, database_url: str) -> dict:
     engine = build_engine(database_url)
     bootstrap_schema(engine)
     with engine.begin() as connection:
-        employees.to_sql("hr_employees", connection, if_exists="replace", index=False)
-        attrition.to_sql("hr_attrition_facts", connection, if_exists="replace", index=False)
-        departments.to_sql("hr_department_summary", connection, if_exists="replace", index=False)
+        connection.execute(text("DELETE FROM hr_attrition_facts"))
+        connection.execute(text("DELETE FROM hr_employees"))
+        connection.execute(text("DELETE FROM hr_department_summary"))
+        employees.to_sql("hr_employees", connection, if_exists="append", index=False)
+        attrition.to_sql("hr_attrition_facts", connection, if_exists="append", index=False)
+        departments.to_sql("hr_department_summary", connection, if_exists="append", index=False)
 
     return {
         "quality": asdict(report),
