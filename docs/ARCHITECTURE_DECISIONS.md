@@ -1,183 +1,156 @@
-# Architecture Decisions
+# 설계 결정 기록
 
-이 문서는 HR Data Pipeline의 기술 선택을 `문제 → 대안 → 선택 → trade-off` 순서로 기록합니다.
+HR 데이터 파이프라인의 주요 선택을 **문제 → 대안 → 선택 → 단점 → 검증** 순서로 정리합니다.
 
-## ADR-001. Notebook을 버리지 않고 Pipeline을 별도 계층으로 추가
+## 1. 노트북은 보존하고 반복 실행 코드는 별도 분리
 
-### Context
+### 문제
+기존 프로젝트는 Jupyter Notebook 중심이었습니다. 노트북은 가설을 빠르게 확인하기 좋지만 반복 실행 경로로 사용하면 실행 순서와 셀 상태에 의존할 수 있고 테스트와 재사용이 어렵습니다.
 
-기존 프로젝트는 탐색적 분석에 적합한 Jupyter Notebook 중심이었습니다. Notebook은 가설을 빠르게 검증하는 데 좋지만, 운영 데이터 파이프라인의 실행 단위로 사용하면 다음 문제가 생깁니다.
-
-- 실행 순서가 cell state에 의존할 수 있음
-- 입력/출력 경계가 불명확함
-- 테스트와 재사용이 어려움
-- scheduler에서 재실행하기 어려움
-
-### Decision
-
-기존 Notebook은 분석 근거로 보존하고, 재현 가능한 로직은 `src/hr_pipeline/` Python package로 분리합니다.
+### 선택
+기존 노트북은 분석 근거로 보존하고 반복 실행 가능한 로직은 `src/hr_pipeline/` Python 패키지로 분리합니다.
 
 ```text
-Exploration → Notebook
-Reusable processing → Python package
-Scheduling → Airflow
-Serving → FastAPI
+탐색 분석 → Notebook
+반복 가능한 처리 → Python 패키지
+실행 관리 → Airflow
+조회 제공 → FastAPI
 ```
 
-기존 작업의 근거를 지우지 않으면서 시스템화 과정을 보여주기 위한 선택입니다.
+---
+
+## 2. DB 적재 전에 데이터 품질 검사
+
+### 문제
+잘못된 행이 DB까지 들어간 뒤 발견되면 부서 집계와 API 결과까지 잘못될 수 있습니다.
+
+### 선택
+적재 전에 다음을 확인합니다.
+
+- 필수 열 존재 여부
+- 필수값 누락
+- 직원 ID 중복
+- 음수 급여
+- 잘못된 이직 여부 값
+
+검사에 실패하면 DB 적재를 시작하지 않습니다.
+
+### 단점
+엄격하게 전체 작업을 실패시키면 일부 정상 행도 함께 적재되지 못합니다. 대규모 운영에서는 잘못된 행만 별도로 격리하는 방식을 검토할 수 있지만, 현재는 전체 스냅샷이 일관되게 유효한지를 우선합니다.
 
 ---
 
-## ADR-002. Load 전에 Data Quality Gate 실행
+## 3. `to_sql(replace)`를 사용하지 않음
 
-### Context
+### 문제
+`DataFrame.to_sql(..., if_exists="replace")`는 기존 테이블을 삭제하고 다시 만들 수 있어 DB에 선언한 기본키, 외래키, CHECK 제약조건을 잃을 수 있습니다.
 
-잘못된 row가 DB까지 적재된 뒤 탐지되면 downstream aggregate와 API 결과까지 오염됩니다.
-
-### Decision
-
-적재 전에 다음을 검증합니다.
-
-- required columns
-- required value null
-- duplicate employee ID
-- negative monthly income
-- invalid Attrition domain
-
-검증 실패 시 load를 시작하지 않습니다.
-
-### Trade-off
-
-엄격한 fail-fast 정책은 일부 정상 row도 함께 적재하지 못하게 만들 수 있습니다. 실제 대규모 파이프라인에서는 quarantine table / partial acceptance가 필요할 수 있지만, 현재 batch snapshot은 **전체 snapshot이 일관되게 유효한가**를 우선합니다.
-
----
-
-## ADR-003. `to_sql(replace)`를 사용하지 않음
-
-### Context
-
-초기 V2 구현에서 `DataFrame.to_sql(..., if_exists="replace")`를 사용할 수 있었지만, 이 방식은 기존 테이블을 drop/create할 수 있어 DB에서 선언한 PK/FK/CHECK constraint를 잃을 수 있습니다.
-
-### Decision
-
-schema는 `bootstrap_schema()`가 관리하고, reload는 하나의 transaction에서:
+### 선택
+DB 스키마는 별도로 유지하고 하나의 트랜잭션 안에서 기존 데이터를 지운 뒤 새 데이터를 적재합니다.
 
 ```text
-DELETE old facts
-DELETE old dimension
-DELETE old aggregate
-APPEND new dimension
-APPEND new facts
-APPEND new aggregate
+기존 이직 데이터 삭제
+기존 직원 데이터 삭제
+기존 부서 집계 삭제
+새 직원 데이터 적재
+새 이직 데이터 적재
+새 부서 집계 적재
 COMMIT
 ```
 
-순서로 수행합니다.
-
-### Why this matters
-
-애플리케이션 코드가 데이터 품질을 검사하더라도 DB constraint는 마지막 무결성 경계입니다. Reload 구현 때문에 그 경계를 제거하면 설계 의도와 코드가 충돌합니다.
+애플리케이션의 데이터 품질 검사와 DB 제약조건을 서로 다른 방어선으로 유지하기 위한 선택입니다.
 
 ---
 
-## ADR-004. Snapshot reload를 하나의 DB Transaction으로 묶음
+## 4. 전체 재적재를 하나의 DB 트랜잭션으로 처리
 
-### Context
+### 문제
+직원 테이블만 새 데이터로 바뀌고 이직 테이블 적재가 실패하면 서로 다른 시점의 데이터가 함께 노출될 수 있습니다.
 
-employee dimension만 새 데이터로 바뀌고 attrition fact 적재가 실패하면 서로 다른 snapshot이 동시에 노출될 수 있습니다.
-
-### Decision
-
-삭제와 append를 `engine.begin()` transaction으로 묶습니다.
+### 선택
+삭제와 새 데이터 적재를 하나의 트랜잭션으로 묶습니다.
 
 ```text
-old snapshot
-     ↓
+기존 스냅샷
+  ↓
 BEGIN
- delete + insert
+삭제 + 새 데이터 적재
 COMMIT
-     ↓
-new snapshot
+  ↓
+새 스냅샷
 ```
 
-중간 단계가 정상 commit되지 않게 합니다.
-
-### Limitation
-
-데이터 규모가 매우 커지면 full reload가 lock/WAL/latency 측면에서 비효율적일 수 있습니다. 그 단계에서는 staging table + atomic swap, incremental load, CDC를 검토합니다.
+### 한계
+데이터가 매우 커지면 전체 삭제·재적재가 락과 로그 기록 비용 때문에 비효율적일 수 있습니다. 그 단계에서는 임시 테이블 교체, 변경분 적재, CDC 등을 검토합니다.
 
 ---
 
-## ADR-005. Raw row와 Aggregate를 분리
+## 5. 원본 행과 조회용 집계를 분리
 
-### Context
+### 문제
+현재 데이터 크기에서는 API가 매번 원본 행을 그룹화해도 충분히 빠를 수 있습니다. 하지만 조회 목적이 명확한 집계라면 같은 계산을 매 요청마다 반복할 필요가 없습니다.
 
-API가 매 요청마다 1,470개 employee row를 GROUP BY해도 현재 데이터에서는 충분히 빠를 수 있습니다. 하지만 사용 목적이 명확한 집계 결과라면 API query마다 계산을 반복할 이유가 없습니다.
-
-### Decision
-
-다음 세 구조로 분리합니다.
+### 선택
 
 ```text
 hr_employees
-→ employee dimension
+→ 직원 차원 테이블
 
 hr_attrition_facts
-→ attrition event/fact
+→ 이직 사실 테이블
 
 hr_department_summary
-→ serving aggregate
+→ 부서별 조회용 집계
 ```
 
-분석 row와 serving read model의 책임을 분리합니다.
+원본에 가까운 데이터와 API 조회용 결과의 책임을 분리합니다.
 
 ---
 
-## ADR-006. Airflow는 계산 엔진이 아니라 Orchestrator
+## 6. Airflow에는 작업 순서만 두고 변환 로직은 Python 코드에 유지
 
-Airflow DAG 안에 데이터 변환 로직을 길게 작성하지 않습니다.
+Airflow DAG 안에 긴 데이터 변환 코드를 직접 넣지 않습니다.
 
-DAG의 역할은:
+Airflow의 역할:
 
 ```text
-schedule
-→ task lifecycle
-→ dependency
-→ retry / observation boundary
+실행 일정
+→ 작업 순서
+→ 의존 관계
+→ 재시도
+→ 성공/실패 상태 관리
 ```
 
-실제 transform/quality/load 로직은 Python package가 담당합니다. 이렇게 해야 scheduler 없이도 같은 pipeline을 CLI/test에서 실행할 수 있습니다.
+실제 품질 검사, 변환, 적재 로직은 Python 패키지가 담당합니다. 이렇게 해야 Airflow 없이도 명령행과 테스트에서 같은 코드를 실행할 수 있습니다.
 
 ---
 
-## ADR-007. Index는 `EXPLAIN ANALYZE` 후 판단
+## 7. 인덱스는 실제 실행 계획을 본 뒤 결정
 
-인덱스를 컬럼마다 추가하지 않습니다.
+인덱스를 모든 열에 만들지 않습니다.
 
-인덱스의 장점:
-- read scan 감소 가능
+장점:
+- 필요한 조회에서 읽는 행 수를 줄일 수 있음
 
 비용:
-- storage
-- insert/update overhead
-- planner가 사용하지 않을 수 있음
+- 저장 공간 증가
+- INSERT/UPDATE 비용 증가
+- 조건에 따라 DB가 사용하지 않을 수도 있음
 
-따라서 `scripts/explain_indexes.sql`을 통해 query plan을 비교하고, 실제 조회 패턴에 필요한 index만 유지하는 방향을 사용합니다.
+따라서 `EXPLAIN ANALYZE`로 실제 조회 계획과 실행시간을 비교해 필요한 인덱스만 유지합니다.
 
 ---
 
-## ADR-008. 성능 수치는 측정 전 작성하지 않음
-
-성능 실험은 다음 계약을 따릅니다.
+## 8. 성능 수치는 측정 전 작성하지 않음
 
 ```text
-same data
-same PostgreSQL version
-same query
-warmup
-EXPLAIN (ANALYZE, BUFFERS)
-index change
-repeat
+같은 데이터
+같은 PostgreSQL 버전
+같은 조회문
+준비 실행
+기준 측정
+인덱스 변경
+재측정
 ```
 
-측정 전에는 `N% faster`와 같은 표현을 README에 기재하지 않습니다.
+실제 측정 전에는 `N% 빨라졌다`와 같은 표현을 README에 적지 않습니다.
